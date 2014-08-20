@@ -16,12 +16,28 @@ import java.util.*;
 
 public class Catalog {
 
+    private Map<Integer, Entry> _entryLookup;   // tableId -> catalog entry
+    private Map<String, Integer> _idLookup;     // table name -> tableId
+
+    private static class Entry {
+        DbFile file;
+        String name;
+        String pkey;
+
+        private Entry(DbFile file, String name, String pkey) {
+            this.file = file;
+            this.name = name;
+            this.pkey = pkey;
+        }
+    }
+
     /**
      * Constructor.
      * Creates a new, empty catalog.
      */
     public Catalog() {
-        // some code goes here
+        _entryLookup = new HashMap<Integer, Entry>();
+        _idLookup = new HashMap<String, Integer>();
     }
 
     /**
@@ -34,7 +50,8 @@ public class Catalog {
      * conflict exists, use the last table to be added as the table for a given name.
      */
     public void addTable(DbFile file, String name, String pkeyField) {
-        // some code goes here
+        _entryLookup.put(file.getId(), new Entry(file, name, pkeyField));
+        _idLookup.put(name, file.getId());
     }
 
     public void addTable(DbFile file, String name) {
@@ -57,8 +74,9 @@ public class Catalog {
      * @throws NoSuchElementException if the table doesn't exist
      */
     public int getTableId(String name) throws NoSuchElementException {
-        // some code goes here
-        return 0;
+        if (!_idLookup.containsKey(name))
+            throw new NoSuchElementException("no table named " + name);
+        return _idLookup.get(name);
     }
 
     /**
@@ -68,8 +86,7 @@ public class Catalog {
      * @throws NoSuchElementException if the table doesn't exist
      */
     public TupleDesc getTupleDesc(int tableid) throws NoSuchElementException {
-        // some code goes here
-        return null;
+        return getDbFile(tableid).getTupleDesc();
     }
 
     /**
@@ -79,28 +96,34 @@ public class Catalog {
      *     function passed to addTable
      */
     public DbFile getDbFile(int tableid) throws NoSuchElementException {
-        // some code goes here
-        return null;
+        Entry entry = _entryLookup.get(tableid);
+        if (entry == null)
+            throw new NoSuchElementException("no table with id " + tableid);
+        return entry.file;
     }
 
     public String getPrimaryKey(int tableid) {
-        // some code goes here
-        return null;
+        Entry entry = _entryLookup.get(tableid);
+        if (entry == null)
+            throw new NoSuchElementException("no table with id " + tableid);
+        return entry.pkey;
     }
 
     public Iterator<Integer> tableIdIterator() {
-        // some code goes here
-        return null;
+        return _entryLookup.keySet().iterator();
     }
 
     public String getTableName(int id) {
-        // some code goes here
-        return null;
+        Entry entry = _entryLookup.get(id);
+        if (entry == null)
+            throw new NoSuchElementException("no table with id " + id);
+        return entry.name;
     }
     
     /** Delete all tables from the catalog */
     public void clear() {
-        // some code goes here
+        _entryLookup.clear();
+        _idLookup.clear();
     }
     
     /**

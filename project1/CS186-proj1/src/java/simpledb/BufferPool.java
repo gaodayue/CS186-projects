@@ -1,6 +1,8 @@
 package simpledb;
 
 import java.io.*;
+import java.util.HashMap;
+import java.util.Map;
 
 /**
  * BufferPool manages the reading and writing of pages into memory from
@@ -20,13 +22,19 @@ public class BufferPool {
     constructor instead. */
     public static final int DEFAULT_PAGES = 50;
 
+    private int numPagesMax;
+    private Page[] buffers;
+    private Map<PageId, Integer> pageBufferMap; // lookup buffer index by pageId
+
     /**
      * Creates a BufferPool that caches up to numPages pages.
      *
      * @param numPages maximum number of pages in this buffer pool.
      */
     public BufferPool(int numPages) {
-        // some code goes here
+        this.numPagesMax = numPages;
+        this.buffers = new Page[numPages];
+        this.pageBufferMap = new HashMap<PageId, Integer>();
     }
 
     /**
@@ -46,8 +54,24 @@ public class BufferPool {
      */
     public  Page getPage(TransactionId tid, PageId pid, Permissions perm)
         throws TransactionAbortedException, DbException {
-        // some code goes here
-        return null;
+
+        // if requested page is in the pool, just return it.
+        if (pageBufferMap.containsKey(pid)) {
+            // need to pin the page?
+            return buffers[pageBufferMap.get(pid)];
+        }
+
+        // else, read in page from disk files
+        Page inPage = Database.getCatalog().getDbFile(pid.getTableId()).readPage(pid);
+
+        // for project 1, just throw DbException when there is insufficient space
+        int numBufferUsed = pageBufferMap.size();
+        if (numBufferUsed >= numPagesMax)
+            throw new DbException("no extra page buffer");
+
+        pageBufferMap.put(pid, numBufferUsed);
+        buffers[numBufferUsed++] = inPage;
+        return inPage;
     }
 
     /**

@@ -65,20 +65,15 @@ public class HeapPage implements Page {
         @return the number of tuples on this page
     */
     private int getNumTuples() {        
-        // some code goes here
-        return 0;
-
+        return BufferPool.PAGE_SIZE * 8 / (td.getSize() * 8 + 1);
     }
 
     /**
      * Computes the number of bytes in the header of a page in a HeapFile with each tuple occupying tupleSize bytes
      * @return the number of bytes in the header of a page in a HeapFile with each tuple occupying tupleSize bytes
      */
-    private int getHeaderSize() {        
-        
-        // some code goes here
-        return 0;
-                 
+    private int getHeaderSize() {
+        return (numSlots + 7) / 8;
     }
     
     /** Return a view of this page before it was modified
@@ -102,8 +97,7 @@ public class HeapPage implements Page {
      * @return the PageId associated with this page.
      */
     public HeapPageId getId() {
-    // some code goes here
-    throw new UnsupportedOperationException("implement this");
+        return pid;
     }
 
     /**
@@ -272,16 +266,22 @@ public class HeapPage implements Page {
      * Returns the number of empty slots on this page.
      */
     public int getNumEmptySlots() {
-        // some code goes here
-        return 0;
+        int nEmptySlots = 0;
+        for (int i = 0; i < numSlots; i++) {
+            if (!isSlotUsed(i)) {
+                nEmptySlots++;
+            }
+        }
+        return nEmptySlots;
     }
 
     /**
      * Returns true if associated slot on this page is filled.
      */
     public boolean isSlotUsed(int i) {
-        // some code goes here
-        return false;
+        if (i < 0 || i >= numSlots)
+            throw new IllegalArgumentException("invalid slot number " + i);
+        return (header[i / 8] & (1 << (i % 8))) != 0;
     }
 
     /**
@@ -297,8 +297,39 @@ public class HeapPage implements Page {
      * (note that this iterator shouldn't return tuples in empty slots!)
      */
     public Iterator<Tuple> iterator() {
-        // some code goes here
-        return null;
+        return new NonEmptyTupleIterator();
+    }
+
+    private class NonEmptyTupleIterator implements Iterator<Tuple> {
+
+        private int totalNonEmptySlots;
+        private int passedNonEmptySlots;
+        private int pos;
+
+        public NonEmptyTupleIterator() {
+            totalNonEmptySlots = tuples.length - getNumEmptySlots();
+            passedNonEmptySlots = 0;
+            pos = 0;
+        }
+
+        @Override
+        public boolean hasNext() {
+            return passedNonEmptySlots < totalNonEmptySlots;
+        }
+
+        @Override
+        public Tuple next() {
+            Tuple res;
+            while ((res = tuples[pos++]) == null)
+                ;
+            passedNonEmptySlots++;
+            return res;
+        }
+
+        @Override
+        public void remove() {
+            throw new UnsupportedOperationException();
+        }
     }
 
 }
