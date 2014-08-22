@@ -22,12 +22,8 @@ public abstract class Operator implements DbIterator {
 
     public Tuple next() throws DbException, TransactionAbortedException,
             NoSuchElementException {
-        if (next == null) {
-            next = fetchNext();
-            if (next == null)
-                throw new NoSuchElementException();
-        }
-
+        if (!hasNext())
+            throw new NoSuchElementException();
         Tuple result = next;
         next = null;
         return result;
@@ -49,7 +45,6 @@ public abstract class Operator implements DbIterator {
      * super.close() in order for Operator's internal state to be consistent.
      */
     public void close() {
-        // Ensures that a future call to next() will fail
         next = null;
         this.open = false;
     }
@@ -59,6 +54,11 @@ public abstract class Operator implements DbIterator {
     private int estimatedCardinality = 0;
 
     public void open() throws DbException, TransactionAbortedException {
+        this.open = true;
+    }
+
+    public void rewind() throws DbException, TransactionAbortedException {
+        next = null;
         this.open = true;
     }
 

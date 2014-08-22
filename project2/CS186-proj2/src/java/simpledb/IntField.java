@@ -69,8 +69,8 @@ public class IntField implements Field {
         case LESS_THAN_OR_EQ:
             return value <= iVal.value;
 
-    case LIKE:
-        return value == iVal.value;
+        case LIKE:
+            return value == iVal.value;
         }
 
         return false;

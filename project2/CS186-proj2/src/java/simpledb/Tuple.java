@@ -101,4 +101,24 @@ public class Tuple implements Serializable {
     public Iterator<Field> fields() {
         return Arrays.asList(_fields).iterator();
     }
+
+    public static Tuple merge(Tuple outerTuple, Tuple innerTuple) {
+        TupleDesc newTd = TupleDesc.merge(outerTuple.getTupleDesc(),
+                                          innerTuple.getTupleDesc());
+        return merge(newTd, outerTuple, innerTuple);
+    }
+
+    public static Tuple merge(TupleDesc mergedDesc, Tuple outerTuple, Tuple innerTuple) {
+        Tuple newTuple = new Tuple(mergedDesc);
+        int i = 0;
+        Iterator<Field> it = outerTuple.fields();
+        while (it.hasNext()) {
+            newTuple.setField(i++, it.next());
+        }
+        it = innerTuple.fields();
+        while (it.hasNext()) {
+            newTuple.setField(i++, it.next());
+        }
+        return newTuple;
+    }
 }

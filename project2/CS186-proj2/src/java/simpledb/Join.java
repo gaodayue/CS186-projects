@@ -9,6 +9,13 @@ public class Join extends Operator {
 
     private static final long serialVersionUID = 1L;
 
+    private JoinPredicate _predicate;
+    private DbIterator _outerChild;
+    private DbIterator _innerChild;
+
+    private TupleDesc _cachedTd;    // avoid recompute merged schema over and over again
+    private Tuple _outerTuple;
+
     /**
      * Constructor. Accepts to children to join and the predicate to join them
      * on
@@ -21,12 +28,13 @@ public class Join extends Operator {
      *            Iterator for the right(inner) relation to join
      */
     public Join(JoinPredicate p, DbIterator child1, DbIterator child2) {
-        // some code goes here
+        _predicate = p;
+        _outerChild = child1;
+        _innerChild = child2;
     }
 
     public JoinPredicate getJoinPredicate() {
-        // some code goes here
-        return null;
+        return _predicate;
     }
 
     /**
@@ -35,8 +43,7 @@ public class Join extends Operator {
      *       alias or table name.
      * */
     public String getJoinField1Name() {
-        // some code goes here
-        return null;
+        return _outerChild.getTupleDesc().getFieldName(_predicate.getField1());
     }
 
     /**
@@ -45,8 +52,7 @@ public class Join extends Operator {
      *       alias or table name.
      * */
     public String getJoinField2Name() {
-        // some code goes here
-        return null;
+        return _innerChild.getTupleDesc().getFieldName(_predicate.getField2());
     }
 
     /**
@@ -54,21 +60,29 @@ public class Join extends Operator {
      *      implementation logic.
      */
     public TupleDesc getTupleDesc() {
-        // some code goes here
-        return null;
+        return TupleDesc.merge(_outerChild.getTupleDesc(),
+                               _innerChild.getTupleDesc());
     }
 
     public void open() throws DbException, NoSuchElementException,
             TransactionAbortedException {
-        // some code goes here
+        super.open();
+        _outerChild.open();
+        _innerChild.open();
+        _cachedTd = getTupleDesc();
     }
 
     public void close() {
-        // some code goes here
+        super.close();
+        _outerChild.close();
+        _innerChild.close();
+        _cachedTd = null;
     }
 
     public void rewind() throws DbException, TransactionAbortedException {
-        // some code goes here
+        super.rewind();
+        _outerChild.rewind();
+        _innerChild.rewind();
     }
 
     /**
@@ -90,19 +104,40 @@ public class Join extends Operator {
      * @see JoinPredicate#filter
      */
     protected Tuple fetchNext() throws TransactionAbortedException, DbException {
-        // some code goes here
-        return null;
+        // implementation of nested-loop join
+        while (true) {
+
+            if (_outerTuple == null) {
+                if (_outerChild.hasNext())
+                    _outerTuple = _outerChild.next();
+                else
+                    return null;
+            }
+
+
+            while (_innerChild.hasNext()) {
+                assert _outerTuple != null;
+                Tuple innerTuple = _innerChild.next();
+                if (_predicate.filter(_outerTuple, innerTuple)) {
+                    return Tuple.merge(_cachedTd, _outerTuple, innerTuple);
+                }
+            }
+            _innerChild.rewind();
+            _outerTuple = null;
+        }
     }
 
     @Override
     public DbIterator[] getChildren() {
-        // some code goes here
-        return null;
+        return new DbIterator[] { _outerChild, _innerChild };
     }
 
     @Override
     public void setChildren(DbIterator[] children) {
-        // some code goes here
+        if (children.length != 2)
+            throw new IllegalArgumentException(
+                    "Join operator should takes 2 children, got " + children.length);
+        _outerChild = children[0];
+        _innerChild = children[1];
     }
-
 }

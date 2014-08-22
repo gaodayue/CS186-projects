@@ -2,6 +2,8 @@ package simpledb;
 
 import java.io.*;
 import java.util.HashMap;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -14,6 +16,7 @@ import java.util.Map;
  * locks to read/write the page.
  */
 public class BufferPool {
+
     /** Bytes per page, including header. */
     public static final int PAGE_SIZE = 4096;
 
@@ -22,9 +25,8 @@ public class BufferPool {
     constructor instead. */
     public static final int DEFAULT_PAGES = 50;
 
-    private int numPagesMax;
-    private Page[] buffers;
-    private Map<PageId, Integer> pageBufferMap; // lookup buffer index by pageId
+    private int _cacheSize;
+    private LinkedHashMap<PageId, Page> _caches;
 
     /**
      * Creates a BufferPool that caches up to numPages pages.
@@ -32,9 +34,8 @@ public class BufferPool {
      * @param numPages maximum number of pages in this buffer pool.
      */
     public BufferPool(int numPages) {
-        this.numPagesMax = numPages;
-        this.buffers = new Page[numPages];
-        this.pageBufferMap = new HashMap<PageId, Integer>();
+        _cacheSize = numPages;
+        _caches = new LinkedHashMap<PageId, Page>(_cacheSize, 1f, true);
     }
 
     /**
@@ -56,22 +57,19 @@ public class BufferPool {
         throws TransactionAbortedException, DbException {
 
         // if requested page is in the pool, just return it.
-        if (pageBufferMap.containsKey(pid)) {
-            // need to pin the page?
-            return buffers[pageBufferMap.get(pid)];
+        if (_caches.containsKey(pid)) {
+            // lock and pin?
+            return _caches.get(pid);
         }
 
         // else, read in page from disk files
-        Page inPage = Database.getCatalog().getDbFile(pid.getTableId()).readPage(pid);
+        Page diskPage = Database.getCatalog().getDbFile(pid.getTableId()).readPage(pid);
 
-        // for project 1, just throw DbException when there is insufficient space
-        int numBufferUsed = pageBufferMap.size();
-        if (numBufferUsed >= numPagesMax)
-            throw new DbException("no extra page buffer");
-
-        pageBufferMap.put(pid, numBufferUsed);
-        buffers[numBufferUsed++] = inPage;
-        return inPage;
+        if (_caches.size() >= _cacheSize) {
+            evictPage();
+        }
+        _caches.put(pid, diskPage);
+        return diskPage;
     }
 
     /**
@@ -99,7 +97,7 @@ public class BufferPool {
     }
 
     /** Return true if the specified transaction has a lock on the specified page */
-    public boolean holdsLock(TransactionId tid, PageId p) {
+    public boolean holdsLock(TransactionId tid, PageId pid) {
         // some code goes here
         // not necessary for proj1
         return false;
@@ -134,8 +132,10 @@ public class BufferPool {
      */
     public void insertTuple(TransactionId tid, int tableId, Tuple t)
         throws DbException, IOException, TransactionAbortedException {
-        // some code goes here
-        // not necessary for proj1
+
+        // note that this extra level of indirection is needed
+        // to support other types of files — like indices — in the future
+        Database.getCatalog().getDbFile(tableId).insertTuple(tid, t);
     }
 
     /**
@@ -153,8 +153,9 @@ public class BufferPool {
      */
     public  void deleteTuple(TransactionId tid, Tuple t)
         throws DbException, TransactionAbortedException {
-        // some code goes here
-        // not necessary for proj1
+
+        int tableId = t.getRecordId().getPageId().getTableId();
+        Database.getCatalog().getDbFile(tableId).deleteTuple(tid, t);
     }
 
     /**
@@ -163,9 +164,11 @@ public class BufferPool {
      *     break simpledb if running in NO STEAL mode.
      */
     public synchronized void flushAllPages() throws IOException {
-        // some code goes here
-        // not necessary for proj1
-
+        for (Map.Entry<PageId, Page> entry : _caches.entrySet()) {
+            if (entry.getValue().isDirty() != null) {
+                flushPage(entry.getKey());
+            }
+        }
     }
 
     /** Remove the specific page id from the buffer pool.
@@ -174,8 +177,7 @@ public class BufferPool {
         cache.
     */
     public synchronized void discardPage(PageId pid) {
-        // some code goes here
-	// not necessary for proj1
+        _caches.remove(pid);
     }
 
     /**
@@ -183,15 +185,20 @@ public class BufferPool {
      * @param pid an ID indicating the page to flush
      */
     private synchronized  void flushPage(PageId pid) throws IOException {
-        // some code goes here
-        // not necessary for proj1
+        // flush the page to disk but keep it in pool
+        Page page = _caches.get(pid);
+        DbFile file = Database.getCatalog().getDbFile(pid.getTableId());
+        file.writePage(page);
+        // if the page is dirty, unmark the dirty bit
+        if (page.isDirty() != null) {
+            page.markDirty(false, null);
+        }
     }
 
     /** Write all pages of the specified transaction to disk.
      */
     public synchronized  void flushPages(TransactionId tid) throws IOException {
-        // some code goes here
-        // not necessary for proj1
+        throw new UnsupportedOperationException();
     }
 
     /**
@@ -199,8 +206,21 @@ public class BufferPool {
      * Flushes the page to disk to ensure dirty pages are updated on disk.
      */
     private synchronized  void evictPage() throws DbException {
-        // some code goes here
-        // not necessary for proj1
+        // pick a page to evict
+        Iterator<Map.Entry<PageId, Page>> it = _caches.entrySet().iterator();
+        Map.Entry<PageId, Page> victimPage = it.next();
+
+        // flush if page is dirty
+        if (victimPage.getValue().isDirty() != null) {
+            try {
+                flushPage(victimPage.getKey());
+            } catch (IOException e) {
+                e.printStackTrace();
+                throw new DbException(e.getMessage());
+            }
+        }
+
+        discardPage(victimPage.getKey()); // remove from pool
     }
 
 }

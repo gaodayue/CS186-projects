@@ -1,11 +1,24 @@
 package simpledb;
 
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.NoSuchElementException;
+
 /**
  * Knows how to compute some aggregate over a set of StringFields.
  */
 public class StringAggregator implements Aggregator {
 
     private static final long serialVersionUID = 1L;
+
+    private int _gbField;
+    private Type _gbFieldType;
+    private int _aggField;
+    private Op _aggOp;
+
+    private Map<Field, Integer> _groupResult;
+    private static final Field DEFAULT_GROUP = new IntField(0);
 
     /**
      * Aggregate constructor
@@ -17,7 +30,16 @@ public class StringAggregator implements Aggregator {
      */
 
     public StringAggregator(int gbfield, Type gbfieldtype, int afield, Op what) {
-        // some code goes here
+        _gbField = gbfield;
+        _gbFieldType = gbfieldtype;
+        _aggField = afield;
+        _aggOp = what;
+
+        _groupResult = new HashMap<Field, Integer>();
+    }
+
+    public boolean isGroupAggregator() {
+        return _gbField != Aggregator.NO_GROUPING;
     }
 
     /**
@@ -25,7 +47,22 @@ public class StringAggregator implements Aggregator {
      * @param tup the Tuple containing an aggregate field and a group-by field
      */
     public void mergeTupleIntoGroup(Tuple tup) {
-        // some code goes here
+        Field groupKey = isGroupAggregator() ? tup.getField(_gbField) : DEFAULT_GROUP;
+        Integer oldValue = _groupResult.get(groupKey);
+
+        switch (_aggOp) {
+            case MIN:
+            case MAX:
+            case SUM:
+            case AVG:
+                throw new UnsupportedOperationException(
+                        "only support COUNT aggregation on STRING field");
+            case COUNT:
+                if (oldValue == null)
+                    _groupResult.put(groupKey, 1);
+                else
+                    _groupResult.put(groupKey, 1 + oldValue);
+        }
     }
 
     /**
@@ -37,8 +74,72 @@ public class StringAggregator implements Aggregator {
      *   aggregate specified in the constructor.
      */
     public DbIterator iterator() {
-        // some code goes here
-        throw new UnsupportedOperationException("please implement me for proj2");
+        return new DbIterator() {
+
+            TupleDesc resultTd;
+            Iterator<Map.Entry<Field, Integer>> it;
+            boolean isOpen;
+
+            @Override
+            public void open() throws DbException, TransactionAbortedException {
+                resultTd = isGroupAggregator() ?
+                        new TupleDesc(new Type[] { _gbFieldType, Type.INT_TYPE }) :
+                        new TupleDesc(new Type[] { Type.INT_TYPE });
+
+                it = _groupResult.entrySet().iterator();
+                isOpen = true;
+            }
+
+            @Override
+            public boolean hasNext() throws DbException, TransactionAbortedException {
+                if (!isOpen)
+                    return false;
+                return it.hasNext();
+            }
+
+            @Override
+            public Tuple next() throws DbException, TransactionAbortedException, NoSuchElementException {
+                if (!hasNext())
+                    throw new NoSuchElementException("no more tuples");
+
+                Map.Entry<Field, Integer> entry = it.next();
+                if (isGroupAggregator())
+                    return makeResultTuple(entry.getKey(), entry.getValue());
+                else
+                    return makeResultTuple(entry.getValue());
+            }
+
+            @Override
+            public void rewind() throws DbException, TransactionAbortedException {
+                close();
+                open();
+            }
+
+            @Override
+            public TupleDesc getTupleDesc() {
+                return resultTd;
+            }
+
+            @Override
+            public void close() {
+                isOpen = false;
+            }
+
+            // make result tuple for grouping aggregator
+            private Tuple makeResultTuple(Field groupField, int aggValue) {
+                Tuple result = new Tuple(resultTd);
+                result.setField(0, groupField);
+                result.setField(1, new IntField(aggValue));
+                return result;
+            }
+
+            // make result tuple for no grouping aggregator
+            private Tuple makeResultTuple(int aggValue) {
+                Tuple result = new Tuple(resultTd);
+                result.setField(0, new IntField(aggValue));
+                return result;
+            }
+        };
     }
 
 }
