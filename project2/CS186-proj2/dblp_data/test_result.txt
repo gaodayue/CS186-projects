@@ -1,14 +1,101 @@
+---------------------------------------------------------------
+--                   Query 1
+---------------------------------------------------------------
 SELECT p.title
 FROM papers p
 WHERE p.title LIKE 'selectivity';
----------------------------------
-0.16s
 
+p.title
+------------
+Optimizing ethanol production selectivity.
+
+Development of feedforward receptive field structure of a simple cell and its contribution to the orientation selectivity: a mod
+
+Influences of formant bandwidth and auditory frequency selectivity on identification of place of articulation in stop consonants
+
+A theoretical entropy score as a single value to express inhibitor selectivity.
+
+ASH structure alignment package: Sensitivity and selectivity in domain classification.
+
+
+ 5 rows.
+Transaction 9 committed.
+----------------
+0.15 seconds
+
+
+---------------------------------------------------------------
+--                   Query 2
+---------------------------------------------------------------
 SELECT p.title, v.name
 FROM papers p, authors a, paperauths pa, venues v
 WHERE a.name = 'E. F. Codd'
 AND pa.authorid = a.id
 AND pa.paperid = p.id
 AND p.venueid = v.id;
----------------------------------
 
+p.title v.name
+-----------------------
+The Gamma-0 n-ary Relational Data Base Interface Specifications of Objects and Operations.  IBM Research Report
+
+Interactive Support for Non-Programmers: The Relational and Network Approaches. IBM Research Report  San Jose  California
+
+Universal  Relation Fails to Replace Relational Model (letter to the editor).   IEEE Software
+
+Derivability  Redundancy and Consistency of Relations Stored in Large Data Banks.   IBM Research Report  San Jose  California
+
+Relational Completeness of Data Base Sublanguages.  In: R. Rustin (ed.): Database Systems: 65-98  Prentice Hall and IBM Research Report RJ 987  San Jose  California
+
+RENDEZVOUS Version 1: An Experimental English Language Query Formulation System for Casual Users of Relational Data Bases.  IBM Research Report
+
+Further Normalization of the Data Base Relational Model.    IBM Research Report  San Jose  California
+
+Normalized Data Base Structure: A Brief Tutorial.   IBM Research Report  San Jose  California
+
+Data Base Sublanguage Founded on the Relational Calculus.   IBM Research Report  San Jose  California
+
+Seven Steps to Rendezvous with the Casual User. IFIP Working Conference Data Base Management
+
+The Capabilities of Relational Database Management Systems. IBM Research Report  San Jose  California
+
+
+ 11 rows.
+Transaction 8 committed.
+----------------
+0.55 seconds
+
+
+---------------------------------------------------------------
+--                   Query 3
+---------------------------------------------------------------
+SELECT a2.name, count(p.id)
+FROM papers p, authors a1, authors a2, paperauths pa1, paperauths pa2
+WHERE a1.name = 'Michael Stonebraker'
+AND pa1.authorid = a1.id 
+AND pa1.paperid = p.id 
+AND pa2.authorid = a2.id 
+AND pa1.paperid = pa2.paperid
+GROUP BY a2.name
+ORDER BY a2.name;
+
+a2.name p.id(count)
+----------------------------
+Akhil Kumar 1
+
+Dale Skeen  1
+
+Eric N. Hanson  1
+
+Lawrence A. Rowe    1
+
+Michael Hirohama    1
+
+Michael Stonebraker 8
+
+Spyros Potamianos   1
+
+
+ 7 rows.
+Transaction 12 committed.
+----------------
+1.34 seconds
