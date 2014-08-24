@@ -198,7 +198,7 @@ public class BufferPool {
     /** Write all pages of the specified transaction to disk.
      */
     public synchronized  void flushPages(TransactionId tid) throws IOException {
-        throw new UnsupportedOperationException();
+        // TODO
     }
 
     /**

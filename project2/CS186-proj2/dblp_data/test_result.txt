@@ -1,0 +1,14 @@
+SELECT p.title
+FROM papers p
+WHERE p.title LIKE 'selectivity';
+---------------------------------
+0.16s
+
+SELECT p.title, v.name
+FROM papers p, authors a, paperauths pa, venues v
+WHERE a.name = 'E. F. Codd'
+AND pa.authorid = a.id
+AND pa.paperid = p.id
+AND p.venueid = v.id;
+---------------------------------
+

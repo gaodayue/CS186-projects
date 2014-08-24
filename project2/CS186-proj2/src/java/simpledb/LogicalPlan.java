@@ -11,7 +11,7 @@ import java.util.NoSuchElementException;
  * LogicalPlan represents a logical query plan that has been through
  * the parser and is ready to be processed by the optimizer.
  * <p>
- * A LogicalPlan consits of a collection of table scan nodes, join
+ * A LogicalPlan consists of a collection of table scan nodes, join
  * nodes, filter nodes, a select list, and a group by field.
  * LogicalPlans can only represent queries with one aggregation field
  * and one group by field.
