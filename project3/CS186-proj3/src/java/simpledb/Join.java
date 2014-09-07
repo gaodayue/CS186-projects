@@ -5,7 +5,7 @@ import java.util.*;
 /**
  * The Join operator implements the relational join operation.
  */
-public class Join implements DbIterator {
+public class Join extends Operator {
 
     private static final long serialVersionUID = 1L;
 
@@ -13,8 +13,8 @@ public class Join implements DbIterator {
     private DbIterator _outerChild;
     private DbIterator _innerChild;
 
-    private TupleDesc _resultSchema;
-    private DbIterator _joinMethod;
+    private TupleDesc _cachedTd;    // avoid recompute merged schema over and over again
+    private Tuple _outerTuple;
 
     /**
      * Constructor. Accepts to children to join and the predicate to join them
@@ -31,15 +31,6 @@ public class Join implements DbIterator {
         _predicate = p;
         _outerChild = child1;
         _innerChild = child2;
-
-        _resultSchema = TupleDesc.merge(_outerChild.getTupleDesc(),
-                                        _innerChild.getTupleDesc());
-
-        // use HashJoin for equijoin, NestedLoopJoin for others
-        if (_predicate.getOperator() == Predicate.Op.EQUALS)
-            _joinMethod = new HashJoin();
-        else
-            _joinMethod = new NestedLoopJoin();
     }
 
     public JoinPredicate getJoinPredicate() {
@@ -64,189 +55,89 @@ public class Join implements DbIterator {
         return _innerChild.getTupleDesc().getFieldName(_predicate.getField2());
     }
 
-    @Override
-    public void open() throws DbException, TransactionAbortedException {
-        _joinMethod.open();
-    }
-
-    @Override
-    public boolean hasNext() throws DbException, TransactionAbortedException {
-        return _joinMethod.hasNext();
-    }
-
-    @Override
-    public Tuple next() throws DbException, TransactionAbortedException, NoSuchElementException {
-        return _joinMethod.next();
-    }
-
-    @Override
-    public void rewind() throws DbException, TransactionAbortedException {
-        _joinMethod.rewind();
-    }
-
-    @Override
-    public void close() {
-        _joinMethod.close();
-    }
-
     /**
      * @see simpledb.TupleDesc#merge(TupleDesc, TupleDesc) for possible
      *      implementation logic.
      */
     public TupleDesc getTupleDesc() {
-        return _resultSchema;
+        return TupleDesc.merge(_outerChild.getTupleDesc(),
+                               _innerChild.getTupleDesc());
     }
 
-
-    public class NestedLoopJoin extends Operator {
-        private Tuple _outerTuple;
-
-        public void open() throws DbException, NoSuchElementException,
-                TransactionAbortedException {
-            super.open();
-            _outerChild.open();
-            _innerChild.open();
-        }
-
-        public void close() {
-            super.close();
-            _outerChild.close();
-            _innerChild.close();
-        }
-
-        public void rewind() throws DbException, TransactionAbortedException {
-            super.rewind();
-            _outerChild.rewind();
-            _innerChild.rewind();
-        }
-
-        @Override
-        protected Tuple fetchNext() throws DbException, TransactionAbortedException {
-            while (true) {
-
-                if (_outerTuple == null) {
-                    if (_outerChild.hasNext())
-                        _outerTuple = _outerChild.next();
-                    else
-                        return null;
-                }
-
-
-                while (_innerChild.hasNext()) {
-                    assert _outerTuple != null;
-                    Tuple innerTuple = _innerChild.next();
-                    if (_predicate.filter(_outerTuple, innerTuple)) {
-                        return Tuple.merge(getTupleDesc(), _outerTuple, innerTuple);
-                    }
-                }
-                _innerChild.rewind();
-                _outerTuple = null;
-            }
-        }
-
-        @Override
-        public DbIterator[] getChildren() {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public void setChildren(DbIterator[] children) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public TupleDesc getTupleDesc() {
-            return _resultSchema;
-        }
+    public void open() throws DbException, NoSuchElementException,
+            TransactionAbortedException {
+        super.open();
+        _outerChild.open();
+        _innerChild.open();
+        _cachedTd = getTupleDesc();
     }
 
-    // only used in equijoin
-    public class HashJoin extends Operator {
-        private Map<Field, List<Tuple>> _hashTable = new HashMap<Field, List<Tuple>>();
+    public void close() {
+        super.close();
+        _outerChild.close();
+        _innerChild.close();
+        _cachedTd = null;
+    }
 
-        private List<Tuple> _nextValues;
-        private int _nextPos;
+    public void rewind() throws DbException, TransactionAbortedException {
+        super.rewind();
+        _outerChild.rewind();
+        _innerChild.rewind();
+    }
 
-        @Override
-        public void open() throws DbException, TransactionAbortedException {
-            super.open();
-            _innerChild.open();
-            // create hash table for the outer table
-            _outerChild.open();
-            while (_outerChild.hasNext()) {
-                Tuple t = _outerChild.next();
-                // add tuple to the value list of the given key
-                Field key = t.getField(_predicate.getField1());
-                if (!_hashTable.containsKey(key)) {
-                    _hashTable.put(key, new ArrayList<Tuple>());
-                }
-                _hashTable.get(key).add(t);
+    /**
+     * Returns the next tuple generated by the join, or null if there are no
+     * more tuples. Logically, this is the next tuple in r1 cross r2 that
+     * satisfies the join predicate. There are many possible implementations;
+     * the simplest is a nested loops join.
+     * <p>
+     * Note that the tuples returned from this particular implementation of Join
+     * are simply the concatenation of joining tuples from the left and right
+     * relation. Therefore, if an equality predicate is used there will be two
+     * copies of the join attribute in the results. (Removing such duplicate
+     * columns can be done with an additional projection operator if needed.)
+     * <p>
+     * For example, if one tuple is {1,2,3} and the other tuple is {1,5,6},
+     * joined on equality of the first column, then this returns {1,2,3,1,5,6}.
+     * 
+     * @return The next matching tuple.
+     * @see JoinPredicate#filter
+     */
+    protected Tuple fetchNext() throws TransactionAbortedException, DbException {
+        // implementation of nested-loop join
+        while (true) {
+
+            if (_outerTuple == null) {
+                if (_outerChild.hasNext())
+                    _outerTuple = _outerChild.next();
+                else
+                    return null;
             }
-            _outerChild.close();
-        }
 
-        @Override
-        public void close() {
-            super.close();
-            _innerChild.close();
-
-            if (_nextValues != null)
-                _nextValues.clear();
-            _hashTable.clear();
-        }
-
-        @Override
-        public void rewind() throws DbException, TransactionAbortedException {
-            super.rewind();
-            _innerChild.rewind();
-        }
-
-        @Override
-        protected Tuple fetchNext() throws DbException, TransactionAbortedException {
-            if (_nextValues != null) {
-                // use cached result
-                Tuple result = _nextValues.get(_nextPos++);
-                if (_nextPos == _nextValues.size()) {
-                    _nextValues = null;
-                    _nextPos = 0;
-                }
-                return result;
-            }
 
             while (_innerChild.hasNext()) {
+                assert _outerTuple != null;
                 Tuple innerTuple = _innerChild.next();
-                Field key = innerTuple.getField(_predicate.getField2());
-                if (_hashTable.containsKey(key)) {  // found a match with outer tuple(s)
-                    List<Tuple> outTuples = _hashTable.get(key);
-                    if (outTuples.size() == 1)
-                        return Tuple.merge(getTupleDesc(), outTuples.get(0), innerTuple);
-                    // cache results if has more than 1 output tuples
-                    _nextValues = new ArrayList<Tuple>();
-                    for (Tuple outTuple : outTuples) {
-                        _nextValues.add(Tuple.merge(getTupleDesc(), outTuple, innerTuple));
-                    }
-                    _nextPos = 1;
-                    return _nextValues.get(0);
-
+                if (_predicate.filter(_outerTuple, innerTuple)) {
+                    return Tuple.merge(_cachedTd, _outerTuple, innerTuple);
                 }
             }
-            // no remaining inner tuple match any out tuples.
-            return null;
+            _innerChild.rewind();
+            _outerTuple = null;
         }
+    }
 
-        @Override
-        public DbIterator[] getChildren() {
-            throw new UnsupportedOperationException();
-        }
+    @Override
+    public DbIterator[] getChildren() {
+        return new DbIterator[] { _outerChild, _innerChild };
+    }
 
-        @Override
-        public void setChildren(DbIterator[] children) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public TupleDesc getTupleDesc() {
-            return _resultSchema;
-        }
+    @Override
+    public void setChildren(DbIterator[] children) {
+        if (children.length != 2)
+            throw new IllegalArgumentException(
+                    "Join operator should takes 2 children, got " + children.length);
+        _outerChild = children[0];
+        _innerChild = children[1];
     }
 }
