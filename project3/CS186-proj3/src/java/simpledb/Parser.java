@@ -273,6 +273,18 @@ public class Parser {
     private Transaction curtrans = null;
     private boolean inUserTrans = false;
 
+    /**
+     * Parse AST to logical plan, optimize logical plan to physical plan,
+     * wrap physical plan in a Query object and return.
+     * @param s   the AST of the input sql
+     * @param tId assigned transaction id to this query
+     * @return    a Query object containing all the information needed to execute the query
+     * @throws TransactionAbortedException
+     * @throws DbException
+     * @throws IOException
+     * @throws simpledb.ParsingException
+     * @throws Zql.ParseException
+     */
     public Query handleQueryStatement(ZQuery s, TransactionId tId)
             throws TransactionAbortedException, DbException, IOException,
             simpledb.ParsingException, Zql.ParseException {
