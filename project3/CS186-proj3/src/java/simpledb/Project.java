@@ -16,20 +16,18 @@ public class Project extends Operator {
      * Constructor accepts a child operator to read tuples to apply projection
      * to and a list of fields in output tuple
      * 
-     * @param fieldList
-     *            The ids of the fields child's tupleDesc to project out
-     * @param typesList
-     *            the types of the fields in the final projection
-     * @param child
-     *            The child operator
+     * @param fieldList the ids of the fields child's tupleDesc to project out
+     * @param typesList the types of the fields in the final projection
+     * @param child the child operator
      */
-    public Project(ArrayList<Integer> fieldList, ArrayList<Type> typesList,
-            DbIterator child) {
-        this(fieldList,typesList.toArray(new Type[]{}),child);
+    public Project(ArrayList<Integer> fieldList,
+                   ArrayList<Type> typesList,
+                   DbIterator child) {
+        this(fieldList, typesList.toArray(new Type[typesList.size()]), child);
     }
     
-    public Project(ArrayList<Integer> fieldList, Type[] types,
-            DbIterator child) {
+    public Project(ArrayList<Integer> fieldList,
+                   Type[] types, DbIterator child) {
         this.child = child;
         outFieldIds = fieldList;
         String[] fieldAr = new String[fieldList.size()];
@@ -87,10 +85,7 @@ public class Project extends Operator {
 
     @Override
     public void setChildren(DbIterator[] children) {
-	if (this.child!=children[0])
-	{
 	    this.child = children[0];
-	}
     }
     
 }

@@ -2,7 +2,6 @@ package simpledb;
 import java.util.Map;
 import java.util.Vector;
 import java.util.HashMap;
-import java.util.Iterator;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.NoSuchElementException;
@@ -96,12 +95,14 @@ public class LogicalPlan {
      *   tables contain a field named field.)
      */
     public void addFilter(String field, Predicate.Op p, String
-        constantValue) throws ParsingException{ 
+        constantValue) throws ParsingException {
 
-        field = disambiguateName(field); 
-        String table = field.split("[.]")[0];
+        field = disambiguateName(field);
+        String[] qualifiedName = field.split("[.]");
+        if (qualifiedName[1].equals("*"))
+            throw new ParsingException("Invalid field '*' in WHERE clause");
         
-        LogicalFilterNode lf = new LogicalFilterNode(table, field.split("[.]")[1], p, constantValue);
+        LogicalFilterNode lf = new LogicalFilterNode(qualifiedName[0], qualifiedName[1], p, constantValue);
         filters.addElement(lf);
     }
 
@@ -118,17 +119,20 @@ public class LogicalPlan {
     */
 
     public void addJoin( String joinField1, String joinField2, Predicate.Op pred) throws ParsingException {
-        joinField1 = disambiguateName(joinField1);
-        joinField2 = disambiguateName(joinField2);
-        String table1Alias = joinField1.split("[.]")[0];
-        String table2Alias = joinField2.split("[.]")[0];
-        String pureField1 = joinField1.split("[.]")[1];
-        String pureField2 = joinField2.split("[.]")[1];
+        String qualifiedName1 = disambiguateName(joinField1);
+        String qualifiedName2 = disambiguateName(joinField2);
 
-        if (table1Alias.equals(table2Alias))
+        String[] field1 = qualifiedName1.split("[.]");
+        String[] field2 = qualifiedName2.split("[.]");
+
+        if (field1[1].equals("*") || field2[1].equals("*"))
+            throw new ParsingException("Cannot use * as join field");
+
+        if (field1[0].equals(field2[0]))
             throw new ParsingException("Cannot join on two fields from same table");
-        LogicalJoinNode lj = new LogicalJoinNode(table1Alias,table2Alias,pureField1, pureField2, pred);
-        System.out.println("Added join between " + joinField1 + " and " + joinField2);
+
+        LogicalJoinNode lj = new LogicalJoinNode(field1[0], field2[0], field1[1], field2[1], pred);
+        System.out.println("Added join between " + qualifiedName1 + " and " + qualifiedName2);
         joins.addElement(lj);
 
     }
@@ -159,13 +163,12 @@ public class LogicalPlan {
     /** Add a scan to the plan. One scan node needs to be added for each alias of a table
         accessed by the plan.
         @param table the id of the table accessed by the plan (can be resolved to a DbFile using {@link Catalog#getDbFile}
-        @param name the alias of the table in the plan
+        @param alias the alias of the table in the plan
     */
-
-    public void addScan(int table, String name) {
-        System.out.println("Added scan of table " + name);
-        tables.addElement(new LogicalScanNode(table,name));
-        tableMap.put(name,table);
+    public void addScan(int table, String alias) {
+        System.out.println("Added scan of table " + alias);
+        tables.addElement(new LogicalScanNode(table,alias));
+        tableMap.put(alias,table);
     }
 
     /** Add a specified field/aggregate combination to the select list of the query.
@@ -175,14 +178,12 @@ public class LogicalPlan {
      * @throws ParsingException 
     */
     public void addProjectField(String fname, String aggOp) throws ParsingException {
-        fname=disambiguateName(fname);
-        if (fname.equals("*"))
-            fname="null.*";
-        System.out.println("Added select list field " + fname);
+        String qualifiedName = disambiguateName(fname);
+        System.out.println("Added select list field " + qualifiedName);
         if (aggOp != null) {
             System.out.println("\t with aggregator " + aggOp);
         }
-        selectList.addElement(new LogicalSelectListNode(aggOp, fname));
+        selectList.addElement(new LogicalSelectListNode(aggOp, qualifiedName));
     }
     
     /** Add an aggregate over the field with the specified grouping to
@@ -194,12 +195,9 @@ public class LogicalPlan {
      * @throws ParsingException 
     */
     public void addAggregate(String op, String afield, String gfield) throws ParsingException {
-        afield=disambiguateName(afield);
-        if (gfield!=null)
-            gfield=disambiguateName(gfield);
         aggOp = op;
-        aggField = afield;
-        groupByField = gfield;
+        aggField = disambiguateName(afield);
+        groupByField = (gfield == null) ? null : disambiguateName(gfield);
         hasAgg = true;
     }
 
@@ -210,52 +208,62 @@ public class LogicalPlan {
      * @throws ParsingException 
     */
     public void addOrderBy(String field, boolean asc) throws ParsingException {
-        field=disambiguateName(field);
-        oByField = field;
+        oByField = disambiguateName(field);
         oByAsc = asc;
         hasOrderBy = true;
+        if (oByField.split("[.]")[1].equals("*"))
+            throw new ParsingException("ORDER BY * is not supported");
     }
 
     /** Given a name of a field, try to figure out what table it belongs to by looking
      *   through all of the tables added via {@link #addScan}. 
-     *  @return A fully qualified name of the form tableAlias.name.  If the name parameter is already qualified
-     *   with a table name, simply returns name.
-     *  @throws ParsingException if the field cannot be found in any of the tables, or if the
-     *   field is ambiguous (appears in multiple tables)
+     *  @return valid "tableAlias.fieldName" or "tableAlias.*" or "null.*"
+     *  @throws ParsingException if the field refers to invalid table alias or field name,
+     *          or if the field is ambiguous (appears in multiple tables)
      */
     String disambiguateName(String name) throws ParsingException {
+        if (name.equals("*") || name.equals("null.*"))
+            return "null.*"; // special value means all fields
 
         String[] fields = name.split("[.]");
-        if (fields.length == 2 && (!fields[0].equals("null")))
-            return name;
-        if (fields.length > 2) 
+        if (fields.length > 2)
             throw new ParsingException("Field " + name + " is not a valid field reference.");
+
+        // if user explicitly specifies tableAlias.fieldName,
+        // check for existence of table and field
+        if (fields.length == 2 && (!fields[0].equals("null"))) {
+            if (!tableMap.containsKey(fields[0]))
+                throw new ParsingException("Field " + name + " references an invalid table");
+            if (fields[1].equals("*"))
+                return name;
+            // check existence of field
+            TupleDesc td = Database.getCatalog().getTupleDesc(tableMap.get(fields[0]));
+            if (!td.hasField(fields[1]))
+                throw new ParsingException("Field " + name + " doesn't exist");
+            return name;    // valid tableAlias.fieldName
+        }
+
+        // either null.fieldName or fieldName, must find the belonging table
         if (fields.length == 2)
             name = fields[1];
-        if (name.equals("*")) return name;
-        //now look for occurrences of name in all of the tables
-        Iterator<LogicalScanNode> tableIt = tables.iterator();
-        String tableName = null;
-        while (tableIt.hasNext()) {
-            LogicalScanNode table = tableIt.next();
-            try {
-                TupleDesc td = Database.getCatalog().getDbFile(table.t).getTupleDesc();
-//                int id = 
-                  td.fieldNameToIndex(name);
-                if (tableName == null) {
-                    tableName = table.alias;
+
+        // find alias of table the field belongs to
+        String tableAlias = null;
+        for (LogicalScanNode scanNode : tables) {
+            TupleDesc td = Database.getCatalog().getTupleDesc(scanNode.tableId);
+            if (td.hasField(name)) {
+                if (tableAlias == null) {
+                    tableAlias = scanNode.alias;
                 } else {
-                    throw new ParsingException("Field " + name + " appears in multiple tables; disambiguate by referring to it as tablename." + name);
+                    throw new ParsingException("Field " + name + " appears in multiple tables");
                 }
-            } catch (NoSuchElementException e) {
-                //ignore
             }
         }
-        if (tableName != null)
-            return tableName + "." + name;
-        else
-            throw new ParsingException("Field " + name + " does not appear in any tables.");
 
+        if (tableAlias == null)
+            throw new ParsingException("Field " + name + " doesn't exist");
+
+        return tableAlias + "." + name;
     }
 
     /** Convert the aggregate operator name s into an Aggregator.op operation.
@@ -285,197 +293,174 @@ public class LogicalPlan {
      *  @return A DbIterator representing this plan.
      */ 
     public DbIterator physicalPlan(TransactionId t, Map<String,TableStats> baseTableStats, boolean explain) throws ParsingException {
-        Iterator<LogicalScanNode> tableIt = tables.iterator();
-        HashMap<String,String> equivMap = new HashMap<String,String>();
-        HashMap<String,Double> filterSelectivities = new HashMap<String, Double>();
+        // table alias => selectivity
+        // the reason we use alias as key here is that in case like self-join,
+        // one table can have several aliases which has different selectivity
+        HashMap<String,Double> selectivities = new HashMap<String, Double>();
+
+        // base table name => statistics
+        // this is a subset of baseTableStats, which contains only tables in the query
         HashMap<String,TableStats> statsMap = new HashMap<String,TableStats>();
 
-        while (tableIt.hasNext()) {
-            LogicalScanNode table = tableIt.next();
-            SeqScan ss = null;
-            try {
-                 ss = new SeqScan(t, Database.getCatalog().getDbFile(table.t).getId(), table.alias);
-            } catch (NoSuchElementException e) {
-                throw new ParsingException("Unknown table " + table.t);
-            }
-            
-            subplanMap.put(table.alias,ss);
-            String baseTableName = Database.getCatalog().getTableName(table.t);
+        // init each scan node as a sequence scan operator
+        // ---------------------------------------------------
+        for (LogicalScanNode scanNode : tables) {
+            SeqScan ss = new SeqScan(t, scanNode.tableId, scanNode.alias);
+            subplanMap.put(scanNode.alias, ss);
+            String baseTableName = Database.getCatalog().getTableName(scanNode.tableId);
             statsMap.put(baseTableName, baseTableStats.get(baseTableName));
-            filterSelectivities.put(table.alias, 1.0);
-
+            selectivities.put(scanNode.alias, 1.0);
         }
 
-        Iterator<LogicalFilterNode> filterIt = filters.iterator();        
-        while (filterIt.hasNext()) {
-            LogicalFilterNode lf = filterIt.next();
-            DbIterator subplan = subplanMap.get(lf.tableAlias);
-            if (subplan == null) {
-                throw new ParsingException("Unknown table in WHERE clause " + lf.tableAlias);
-            }
+        // add filter operator and estimate table's selectivity
+        // ---------------------------------------------------
+        for (LogicalFilterNode filterNode : filters) {
+            DbIterator childPlan = subplanMap.get(filterNode.tableAlias);
+            TupleDesc td = childPlan.getTupleDesc();
+            // NOTE: tuple description of scan node uses qualified field name
+            int fieldIndex = td.fieldNameToIndex(filterNode.qualifiedFieldName);
+            Type fieldType = td.getFieldType(fieldIndex);
 
-            Field f;
-            Type ftyp;
-            TupleDesc td = subplanMap.get(lf.tableAlias).getTupleDesc();
-            
-            try {//td.fieldNameToIndex(disambiguateName(lf.fieldPureName))
-                ftyp = td.getFieldType(td.fieldNameToIndex(lf.fieldQuantifiedName));
-            } catch (java.util.NoSuchElementException e) {
-                throw new ParsingException("Unknown field in filter expression " + lf.fieldQuantifiedName);
-            }
-            if (ftyp == Type.INT_TYPE)
-                f = new IntField(new Integer(lf.c).intValue());
-            else
-                f = new StringField(lf.c, Type.STRING_LEN);
+            Field constantField = (fieldType == Type.INT_TYPE) ?
+                    new IntField(Integer.parseInt(filterNode.c)) :
+                    new StringField(filterNode.c, Type.STRING_LEN);
 
-            Predicate p = null;
-            try {
-                p = new Predicate(subplan.getTupleDesc().fieldNameToIndex(lf.fieldQuantifiedName), lf.p,f);
-            } catch (NoSuchElementException e) {
-                throw new ParsingException("Unknown field " + lf.fieldQuantifiedName);
-            }
-            subplanMap.put(lf.tableAlias, new Filter(p, subplan));
+            // add filter operator
+            Predicate predicate = new Predicate(fieldIndex, filterNode.p, constantField);
+            subplanMap.put(filterNode.tableAlias, new Filter(predicate, childPlan));
 
-            TableStats s = statsMap.get(Database.getCatalog().getTableName(this.getTableId(lf.tableAlias)));
-            
-            double sel= s.estimateSelectivity(subplan.getTupleDesc().fieldNameToIndex(lf.fieldQuantifiedName), lf.p, f);
-            filterSelectivities.put(lf.tableAlias, filterSelectivities.get(lf.tableAlias) * sel);
-
-            //s.addSelectivityFactor(estimateFilterSelectivity(lf,statsMap));
+            // update selectivity
+            String originalName = Database.getCatalog().getTableName(this.getTableId(filterNode.tableAlias));
+            TableStats stats = statsMap.get(originalName);
+            double oldSel = selectivities.get(filterNode.tableAlias);
+            selectivities.put(filterNode.tableAlias, oldSel * stats.estimateSelectivity(predicate));
         }
-        
-        JoinOptimizer jo = new JoinOptimizer(this,joins);
 
-        joins = jo.orderJoins(statsMap,filterSelectivities,explain);
+        // order joins, pick the best physical plan
+        // ---------------------------------------------------
+        JoinOptimizer optimizer = new JoinOptimizer(this, joins);
+        joins = optimizer.orderJoins(statsMap, selectivities, explain);
 
-        Iterator<LogicalJoinNode> joinIt = joins.iterator();
-        while (joinIt.hasNext()) {
-            LogicalJoinNode lj = joinIt.next();
-            DbIterator plan1;
-            DbIterator plan2;
-            boolean isSubqueryJoin = lj instanceof LogicalSubplanJoinNode;
-            String t1name, t2name;
 
-            if (equivMap.get(lj.t1Alias)!=null)
-                t1name = equivMap.get(lj.t1Alias);
-            else
-                t1name = lj.t1Alias;
+        // build up plan according to the join order
+        // ---------------------------------------------------
+        // NOTE that we consider all linear plan rather than left-deep plan in optimizer
+        // and joins[0] is the bottom-most join.
 
-            if (equivMap.get(lj.t2Alias)!=null)
-                t2name = equivMap.get(lj.t2Alias);
-            else
-                t2name = lj.t2Alias;
+        // equivMap[t2] == t1 means t1 & t2 have been joined together and
+        // you should always use subplanMap[t1] to get the plan
+        HashMap<String,String> equivMap = new HashMap<String,String>();
 
-            plan1 = subplanMap.get(t1name);
+        for (LogicalJoinNode joinNode : joins) {
+            boolean isSubQueryJoin = joinNode instanceof LogicalSubplanJoinNode;
 
-            if (isSubqueryJoin) {
-                plan2 = ((LogicalSubplanJoinNode)lj).subPlan;
-                if (plan2 == null) 
-                    throw new ParsingException("Invalid subquery.");
-            } else { 
-                plan2 = subplanMap.get(t2name);
+            DbIterator leftPlan;
+            DbIterator rightPlan;
+            String leftKey = null;
+            String rightKey = null;
+
+            if (equivMap.containsKey(joinNode.t1Alias)) {
+                leftKey = equivMap.get(joinNode.t1Alias);
+            } else {
+                leftKey = joinNode.t1Alias;
             }
-            
-            if (plan1 == null)
-                throw new ParsingException("Unknown table in WHERE clause " + lj.t1Alias);
-            if (plan2 == null)
-                throw new ParsingException("Unknown table in WHERE clause " + lj.t2Alias);
-            
-            DbIterator j;
-            j = jo.instantiateJoin(lj,plan1,plan2);
-            subplanMap.put(t1name, j);
+            leftPlan = subplanMap.get(leftKey);
 
-            if (!isSubqueryJoin) {
-                subplanMap.remove(t2name);
-                equivMap.put(t2name,t1name);  //keep track of the fact that this new node contains both tables
-                    //make sure anything that was equiv to lj.t2 (which we are just removed) is
-                    // marked as equiv to lj.t1 (which we are replacing lj.t2 with.)
-                    for (java.util.Map.Entry<String, String> s: equivMap.entrySet()) {
-                        String val = s.getValue();
-                        if (val.equals(t2name)) {
-                            s.setValue(t1name);
-                        }
+            if (isSubQueryJoin) {
+                rightPlan = ((LogicalSubplanJoinNode) joinNode).subPlan;
+                if (rightPlan == null) throw new ParsingException("invalid sub query");
+
+            } else {
+                if (equivMap.containsKey(joinNode.t2Alias)) {
+                    rightKey = equivMap.get(joinNode.t2Alias);
+                } else {
+                    rightKey = joinNode.t2Alias;
+                }
+                rightPlan = subplanMap.get(rightKey);
+            }
+
+            assert leftPlan != null && rightPlan != null;
+            subplanMap.put(leftKey, JoinOptimizer.instantiateJoin(joinNode, leftPlan, rightPlan));
+
+            if (!isSubQueryJoin) {
+                subplanMap.remove(rightKey);
+                // all entries in equivMap should point to leftKey, which
+                // identified the current joined tree
+                equivMap.put(rightKey, leftKey);
+                for (Map.Entry<String, String> entry : equivMap.entrySet()) {
+                    // old entries pointed to rightKey should point to leftKey now
+                    if (entry.getValue().equals(rightKey)) {
+                        entry.setValue(leftKey);
                     }
-                    
-                // subplanMap.put(lj.t2, j);
+                }
             }
-            
         }
 
-        if (subplanMap.size() > 1) {
+        if (subplanMap.size() > 1)
             throw new ParsingException("Query does not include join expressions joining all nodes!");
-        }
         
-        DbIterator node =  (DbIterator)(subplanMap.entrySet().iterator().next().getValue());
+        DbIterator node =  subplanMap.entrySet().iterator().next().getValue();
+        TupleDesc nodeTd = node.getTupleDesc();
 
-        //walk the select list, to determine order in which to project output fields
+        // project output fields in select list
+        // ---------------------------------------------------
         ArrayList<Integer> outFields = new ArrayList<Integer>();
         ArrayList<Type> outTypes = new ArrayList<Type>();
-        for (int i = 0; i < selectList.size(); i++) {
-            LogicalSelectListNode si = selectList.elementAt(i);
-            if (si.aggOp != null) {
-                outFields.add(groupByField!=null?1:0);
-                TupleDesc td = node.getTupleDesc();
-//                int  id;
-                try {
-//                    id = 
-                    td.fieldNameToIndex(si.fname);
-                } catch (NoSuchElementException e) {
-                    throw new ParsingException("Unknown field " +  si.fname + " in SELECT list");
-                }
-                outTypes.add(Type.INT_TYPE);  //the type of all aggregate functions is INT
 
-            } else if (hasAgg) {
-                    if (groupByField == null) {
-                        throw new ParsingException("Field " + si.fname + " does not appear in GROUP BY list");
-                    }
-                    outFields.add(0);
-                    TupleDesc td = node.getTupleDesc();
-                    int  id;
-                    try {
-                        id = td.fieldNameToIndex(groupByField);
-                    } catch (NoSuchElementException e) {
-                        throw new ParsingException("Unknown field " +  groupByField + " in GROUP BY statement");
-                    }
-                    outTypes.add(td.getFieldType(id));
-            } else if (si.fname.equals("null.*")) {
-                    TupleDesc td = node.getTupleDesc();
-                    for ( i = 0; i < td.numFields(); i++) {
-                        outFields.add(i);
-                        outTypes.add(td.getFieldType(i));
-                    }
-            } else  {
-                    TupleDesc td = node.getTupleDesc();
-                    int id;
-                    try {
-                        id = td.fieldNameToIndex(si.fname);
-                    } catch (NoSuchElementException e) {
-                        throw new ParsingException("Unknown field " +  si.fname + " in SELECT list");
-                    }
-                    outFields.add(id);
-                    outTypes.add(td.getFieldType(id));
-
-                }
-        }
-
+        // special case: if using aggregation, the result is either
+        // 1 column (aggregation result) or 2 columns (group name and aggregation value)
         if (hasAgg) {
-            TupleDesc td = node.getTupleDesc();
-            Aggregate aggNode;
-            try {
-                aggNode = new Aggregate(node,
-                                        td.fieldNameToIndex(aggField),
-                                        groupByField == null?Aggregator.NO_GROUPING:td.fieldNameToIndex(groupByField),
-                                getAggOp(aggOp));
-            } catch (NoSuchElementException e) {
-                throw new simpledb.ParsingException(e);
-            } catch (IllegalArgumentException e) {
-                throw new simpledb.ParsingException(e);
+            int idx = 0;
+            if (groupByField != null) {
+                if (!groupByField.equals(selectList.get(0).qualifiedFieldName))
+                    throw new ParsingException("the first field in select list is not the group by field");
+                // for group name field
+                outFields.add(idx++);
+                outTypes.add(nodeTd.getFieldType(nodeTd.fieldNameToIndex(groupByField)));
             }
-            node = aggNode;
+
+            if (selectList.size() != idx + 1)
+                throw new ParsingException("with aggregation, there should be " + (idx + 1) + " fields in select list");
+            if (selectList.get(idx).aggOp == null)
+                throw new ParsingException("with aggregation, the " + (idx + 1) + " field should be an aggregation");
+
+            // for aggregation field
+            outFields.add(idx);
+            outTypes.add(Type.INT_TYPE);  //the type of all aggregate functions is INT
+
+        } else {
+            for (LogicalSelectListNode selectNode : selectList) {
+                if (selectNode.qualifiedFieldName.equals("null.*")) {
+                    // project all fields
+                    for (int j = 0; j < nodeTd.numFields(); j++) {
+                        outFields.add(j);
+                        outTypes.add(nodeTd.getFieldType(j));
+                    }
+
+                } else {
+                    // project one field
+                    int fieldIndex = nodeTd.fieldNameToIndex(selectNode.qualifiedFieldName);
+                    outFields.add(fieldIndex);
+                    outTypes.add(nodeTd.getFieldType(fieldIndex));
+                }
+            }
         }
 
+        // add aggregation operator
+        // ---------------------------------------------------
+        if (hasAgg) {
+            int aggFieldIndex = nodeTd.fieldNameToIndex(aggField);
+            int gbFieldIndex = groupByField == null ?
+                                    Aggregator.NO_GROUPING :
+                                    nodeTd.fieldNameToIndex(groupByField);
+
+            node = new Aggregate(node, aggFieldIndex, gbFieldIndex, getAggOp(aggOp));
+        }
+
+        // add order by operator
+        // ---------------------------------------------------
         if (hasOrderBy) {
-            node = new OrderBy(node.getTupleDesc().fieldNameToIndex(oByField), oByAsc, node);
+            node = new OrderBy(nodeTd.fieldNameToIndex(oByField), oByAsc, node);
         }
 
         return new Project(outFields, outTypes, node);

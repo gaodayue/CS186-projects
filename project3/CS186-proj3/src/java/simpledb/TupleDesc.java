@@ -137,6 +137,20 @@ public class TupleDesc implements Serializable {
     }
 
     /**
+     * Tell whether a field with specified name existed in this tuple.
+     * @param name name of a field
+     * @return true if this tuple contains field named `name`
+     */
+    public boolean hasField(String name) {
+        if (name == null) return false;
+        for (int i = 0; i < _items.size(); i++) {
+            if (name.equals(_items.get(i).fieldName))
+                return true;
+        }
+        return false;
+    }
+
+    /**
      * @return The size (in bytes) of tuples corresponding to this TupleDesc.
      *         Note that tuples from a given TupleDesc are of a fixed size.
      */

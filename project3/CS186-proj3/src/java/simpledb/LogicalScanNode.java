@@ -9,11 +9,11 @@ public class LogicalScanNode {
 
     /** The table identifier (can be passed to {@link Catalog#getDbFile})
      *   to retrieve a DbFile */
-    public int t;
+    public int tableId;
 
-    public LogicalScanNode(int table, String tableAlias) {
+    public LogicalScanNode(int tableId, String tableAlias) {
         this.alias = tableAlias;
-        this.t = table;
+        this.tableId = tableId;
     }
 }
 

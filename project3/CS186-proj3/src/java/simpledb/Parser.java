@@ -35,6 +35,14 @@ public class Parser {
         throw new simpledb.ParsingException("Unknown predicate " + s);
     }
 
+    /**
+     * Convert expression to either FilterNode or JoinNode to be added to
+     * logical plan.
+     * @param tid   transaction id assigned to current query
+     * @param wx    parsed expression
+     * @param lp    the logical plan under constructed
+     * @throws simpledb.ParsingException when encounter unsupported expression
+     */
     void processExpression(TransactionId tid, ZExpression wx, LogicalPlan lp)
             throws simpledb.ParsingException {
         if (wx.getOperator().equals("AND")) {
@@ -132,6 +140,15 @@ public class Parser {
 
     }
 
+    /**
+     * Construct a logical plan from AST.
+     * @param tid   transaction id assigned to current query
+     * @param q     parsed AST
+     * @return      the logical plan corresponding to the query
+     * @throws IOException
+     * @throws Zql.ParseException
+     * @throws simpledb.ParsingException    when failed to analyze the query
+     */
     public LogicalPlan parseQueryLogicalPlan(TransactionId tid, ZQuery q)
             throws IOException, Zql.ParseException, simpledb.ParsingException {
         @SuppressWarnings("unchecked")
@@ -554,6 +571,7 @@ public class Parser {
                                 + curtrans.getId().getId() + " committed.");
                     }
                 } catch (Throwable a) {
+                    a.printStackTrace();
                     // Whenever error happens, abort the current transaction
                     if (curtrans != null) {
                         curtrans.abort();

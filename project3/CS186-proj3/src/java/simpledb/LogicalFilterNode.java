@@ -17,19 +17,15 @@ public class LogicalFilterNode {
     public String c;
     
     /** The field from t which is in the filter. The pure name, without alias or tablename*/
-    public String fieldPureName;
+    public String fieldName;
+
+    public String qualifiedFieldName;
     
-    public String fieldQuantifiedName;
-    
-    public LogicalFilterNode(String table, String field, Predicate.Op pred, String constant) {
-        tableAlias = table;
+    public LogicalFilterNode(String tableAlias, String fieldName, Predicate.Op pred, String constant) {
+        this.tableAlias = tableAlias;
+        this.fieldName = fieldName;
         p = pred;
         c = constant;
-        String[] tmps = field.split("[.]");
-        if (tmps.length>1)
-            fieldPureName = tmps[tmps.length-1];
-        else
-            fieldPureName=field;
-        this.fieldQuantifiedName = tableAlias+"."+fieldPureName;
+        qualifiedFieldName = tableAlias + "." + fieldName;
     }
 }

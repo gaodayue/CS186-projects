@@ -28,50 +28,23 @@ public class JoinOptimizer {
     }
 
     /**
-     * Return best iterator for computing a given logical join, given the
-     * specified statistics, and the provided left and right subplans. Note that
-     * there is insufficient information to determine which plan should be the
-     * inner/outer here -- because DbIterator's don't provide any cardinality
-     * estimates, and stats only has information about the base tables. For this
-     * reason, the plan1
-     * 
-     * @param lj
-     *            The join being considered
-     * @param plan1
-     *            The left join node's child
-     * @param plan2
-     *            The right join node's child
+     * Return a new Join operator based on the logical join node and its
+     * left and right plan.
+     * @param lj logical join node containing information about join fields and predicate
+     * @param leftPlan  left child plan
+     * @param rightPlan right child plan
+     * @return a new plan
      */
     public static DbIterator instantiateJoin(LogicalJoinNode lj,
-            DbIterator plan1, DbIterator plan2) throws ParsingException {
+                                             DbIterator leftPlan,
+                                             DbIterator rightPlan) {
 
-        int t1id = 0, t2id = 0;
-        DbIterator j;
+        int t1field = leftPlan.getTupleDesc().fieldNameToIndex(lj.f1QualifiedName);
+        int t2field = (lj instanceof LogicalSubplanJoinNode) ?
+                        0 : rightPlan.getTupleDesc().fieldNameToIndex(lj.f2QualifiedName);
 
-        try {
-            t1id = plan1.getTupleDesc().fieldNameToIndex(lj.f1QuantifiedName);
-        } catch (NoSuchElementException e) {
-            throw new ParsingException("Unknown field " + lj.f1QuantifiedName);
-        }
-
-        if (lj instanceof LogicalSubplanJoinNode) {
-            t2id = 0;
-        } else {
-            try {
-                t2id = plan2.getTupleDesc().fieldNameToIndex(
-                        lj.f2QuantifiedName);
-            } catch (NoSuchElementException e) {
-                throw new ParsingException("Unknown field "
-                        + lj.f2QuantifiedName);
-            }
-        }
-
-        JoinPredicate p = new JoinPredicate(t1id, lj.p, t2id);
-
-        j = new Join(p,plan1,plan2);
-
-        return j;
-
+        JoinPredicate p = new JoinPredicate(t1field, lj.p, t2field);
+        return new Join(p, leftPlan, rightPlan);
     }
 
     /**
@@ -111,7 +84,12 @@ public class JoinOptimizer {
             // HINT: You may need to use the variable "j" if you implemented
             // a join algorithm that's more complicated than a basic nested-loops
             // join.
-            return -1.0;
+
+            // For our NestedLoopJoin implementation:
+            // iocost(A join B) = scancost(A) + ntups(A) * scancost(B)
+            // cpucost(A join B) = ntups(A) * ntups(B)
+            return (cost1 + card1 * cost2) +
+                    card1 * card2;
         }
     }
 
@@ -142,7 +120,7 @@ public class JoinOptimizer {
             return card1;
         } else {
             return estimateTableJoinCardinality(j.p, j.t1Alias, j.t2Alias,
-                    j.f1PureName, j.f2PureName, card1, card2, t1pkey, t2pkey,
+                    j.f1Name, j.f2Name, card1, card2, t1pkey, t2pkey,
                     stats, p.getTableAliasToIdMapping());
         }
     }
@@ -154,9 +132,21 @@ public class JoinOptimizer {
             String field2PureName, int card1, int card2, boolean t1pkey,
             boolean t2pkey, Map<String, TableStats> stats,
             Map<String, Integer> tableAliasToId) {
-        int card = 1;
-        // some code goes here
-        return card <= 0 ? 1 : card;
+
+        if (joinOp == Predicate.Op.EQUALS) {    // equi-join
+            if (t1pkey && t2pkey)
+                return Math.min(card1, card2);
+            if (t1pkey)
+                return card2;
+            if (t2pkey)
+                return card1;
+            // TODO better estimation based on histograms
+            return Math.max(card1, card2);
+
+        } else {    // range join
+            // TODO better estimation based on histograms
+            return (int) (0.3 * card1 * card2);
+        }
     }
 
     /**
@@ -217,12 +207,37 @@ public class JoinOptimizer {
             HashMap<String, Double> filterSelectivities, boolean explain)
             throws ParsingException {
 
-        // See the project writeup for some hints as to how this function
-        // should work.
+        if (joins.isEmpty()) return joins;
 
-        // some code goes here
-        //Replace the following
-        return joins;
+        PlanCache planCache = new PlanCache();
+
+        // pass [1..joins.size()]
+        for (int i = 1; i <= joins.size(); i++) {
+            // find best join order for all subset of length i
+            for (Set<LogicalJoinNode> subset : enumerateSubsets(joins, i)) {
+                CostCard bestResult = new CostCard();
+                bestResult.cost = Double.MAX_VALUE;
+
+                // find best order to join {subset - newNodeToJoin} and newNodeToJoin
+                for (LogicalJoinNode newNodeToJoin : subset) {
+                    CostCard result = computeCostAndCardOfSubplan(stats, filterSelectivities,
+                                                                  newNodeToJoin, subset,
+                                                                  bestResult.cost, planCache);
+                    if (result != null)
+                        bestResult = result;
+                }
+
+                if (bestResult.plan != null) {
+                    planCache.addPlan(subset, bestResult.cost, bestResult.card, bestResult.plan);
+                }
+            }
+        }
+
+        Vector<LogicalJoinNode> bestOrder = planCache.getOrder(new HashSet<LogicalJoinNode>(joins));
+        if (explain) {
+            printJoins(bestOrder, planCache, stats, filterSelectivities);
+        }
+        return bestOrder;
     }
 
     // ===================== Private Methods =================================
@@ -277,34 +292,30 @@ public class JoinOptimizer {
                 this.p.getTableId(j.t1Alias));
         String table2Name = Database.getCatalog().getTableName(
                 this.p.getTableId(j.t2Alias));
-        String table1Alias = j.t1Alias;
-        String table2Alias = j.t2Alias;
 
-        Set<LogicalJoinNode> news = (Set<LogicalJoinNode>) ((HashSet<LogicalJoinNode>) joinSet)
-                .clone();
-        news.remove(j);
+        Set<LogicalJoinNode> prevJoinedSet = new HashSet<LogicalJoinNode>(joinSet);
+        prevJoinedSet.remove(j);
 
         double t1cost, t2cost;
         int t1card, t2card;
         boolean leftPkey, rightPkey;
 
-        if (news.isEmpty()) { // base case -- both are base relations
+        if (prevJoinedSet.isEmpty()) { // base case -- both are base relations
             prevBest = new Vector<LogicalJoinNode>();
             t1cost = stats.get(table1Name).estimateScanCost();
             t1card = stats.get(table1Name).estimateTableCardinality(
                     filterSelectivities.get(j.t1Alias));
-            leftPkey = isPkey(j.t1Alias, j.f1PureName);
+            leftPkey = isPkey(j.t1Alias, j.f1Name);
 
-            t2cost = table2Alias == null ? 0 : stats.get(table2Name)
-                    .estimateScanCost();
-            t2card = table2Alias == null ? 0 : stats.get(table2Name)
-                    .estimateTableCardinality(
-                            filterSelectivities.get(j.t2Alias));
-            rightPkey = table2Alias == null ? false : isPkey(table2Alias,
-                    j.f2PureName);
-        } else {
-            // news is not empty -- figure best way to join j to news
-            prevBest = pc.getOrder(news);
+            t2cost = j.t2Alias == null ?
+                        0 : stats.get(table2Name).estimateScanCost();
+            t2card = j.t2Alias == null ?
+                        0 : stats.get(table2Name).estimateTableCardinality(
+                    filterSelectivities.get(j.t2Alias));
+            rightPkey = j.t2Alias != null && isPkey(j.t2Alias, j.f2Name);
+
+        } else { // news is not empty -- figure best way to join news to j
+            prevBest = pc.getOrder(prevJoinedSet);
 
             // possible that we have not cached an answer, if subset
             // includes a cross product
@@ -312,37 +323,31 @@ public class JoinOptimizer {
                 return null;
             }
 
-            double prevBestCost = pc.getCost(news);
-            int bestCard = pc.getCard(news);
+            double prevBestCost = pc.getCost(prevJoinedSet);
+            int bestCard = pc.getCard(prevJoinedSet);
 
             // estimate cost of right subtree
-            if (doesJoin(prevBest, table1Alias)) { // j.t1 is in prevBest
-                t1cost = prevBestCost; // left side just has cost of whatever
-                                       // left
-                // subtree is
+            if (doesJoin(prevBest, j.t1Alias)) { // j.t1 is in prevBest
+                t1cost = prevBestCost;
                 t1card = bestCard;
                 leftPkey = hasPkey(prevBest);
 
-                t2cost = j.t2Alias == null ? 0 : stats.get(table2Name)
-                        .estimateScanCost();
-                t2card = j.t2Alias == null ? 0 : stats.get(table2Name)
-                        .estimateTableCardinality(
-                                filterSelectivities.get(j.t2Alias));
-                rightPkey = j.t2Alias == null ? false : isPkey(j.t2Alias,
-                        j.f2PureName);
-            } else if (doesJoin(prevBest, j.t2Alias)) { // j.t2 is in prevbest
-                                                        // (both
-                // shouldn't be)
-                t2cost = prevBestCost; // left side just has cost of whatever
-                                       // left
-                // subtree is
+                t2cost = j.t2Alias == null ?
+                            0 : stats.get(table2Name).estimateScanCost();
+                t2card = j.t2Alias == null ?
+                            0 : stats.get(table2Name).estimateTableCardinality(
+                        filterSelectivities.get(j.t2Alias));
+                rightPkey = j.t2Alias != null && isPkey(j.t2Alias, j.f2Name);
+
+            } else if (doesJoin(prevBest, j.t2Alias)) { // j.t2 is in prevbest (both shouldn't be)
+                t2cost = prevBestCost;
                 t2card = bestCard;
                 rightPkey = hasPkey(prevBest);
 
                 t1cost = stats.get(table1Name).estimateScanCost();
                 t1card = stats.get(table1Name).estimateTableCardinality(
-                        filterSelectivities.get(j.t1Alias));
-                leftPkey = isPkey(j.t1Alias, j.f1PureName);
+                            filterSelectivities.get(j.t1Alias));
+                leftPkey = isPkey(j.t1Alias, j.f1Name);
 
             } else {
                 // don't consider this plan if one of j.t1 or j.t2
@@ -351,16 +356,15 @@ public class JoinOptimizer {
             }
         }
 
-        // case where prevbest is left
+        // case where prevbest is left child of join
         double cost1 = estimateJoinCost(j, t1card, t2card, t1cost, t2cost);
 
         LogicalJoinNode j2 = j.swapInnerOuter();
         double cost2 = estimateJoinCost(j2, t2card, t1card, t2cost, t1cost);
         if (cost2 < cost1) {
-            boolean tmp;
             j = j2;
             cost1 = cost2;
-            tmp = rightPkey;
+            boolean tmp = rightPkey;
             rightPkey = leftPkey;
             leftPkey = tmp;
         }
@@ -369,8 +373,7 @@ public class JoinOptimizer {
 
         CostCard cc = new CostCard();
 
-        cc.card = estimateJoinCardinality(j, t1card, t2card, leftPkey,
-                rightPkey, stats);
+        cc.card = estimateJoinCardinality(j, t1card, t2card, leftPkey, rightPkey, stats);
         cc.cost = cost1;
         cc.plan = (Vector<LogicalJoinNode>) prevBest.clone();
         cc.plan.addElement(j); // prevbest is left -- add new join to end
@@ -412,8 +415,8 @@ public class JoinOptimizer {
      */
     private boolean hasPkey(Vector<LogicalJoinNode> joinlist) {
         for (LogicalJoinNode j : joinlist) {
-            if (isPkey(j.t1Alias, j.f1PureName)
-                    || (j.t2Alias != null && isPkey(j.t2Alias, j.f2PureName)))
+            if (isPkey(j.t1Alias, j.f1Name)
+                    || (j.t2Alias != null && isPkey(j.t2Alias, j.f2Name)))
                 return true;
         }
         return false;
@@ -423,7 +426,7 @@ public class JoinOptimizer {
     /**
      * Helper function to display a Swing window with a tree representation of
      * the specified list of joins. See {@link #orderJoins}, which may want to
-     * call this when the analyze flag is true.
+     * call this when the explain flag is true.
      * 
      * @param js
      *            the join plan to visualize
